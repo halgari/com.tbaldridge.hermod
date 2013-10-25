@@ -1,7 +1,8 @@
 (ns clojure.core.async.net-test
   (:require [clojure.test :refer :all]
             [clojure.core.async :refer [chan <!! >!! go]]
-            [clojure.core.async.net :refer :all])
+            [clojure.core.async.net.impl.internals :refer :all]
+            [clojure.core.async.net :as net])
   (:import [java.nio ByteBuffer]))
 
 (deftest bind-connect
@@ -71,13 +72,13 @@
 
 (deftest local-mailbox
   (testing "send recv directly"
-    (with-open [mb (mailbox)]
+    (with-open [mb (net/mailbox)]
       (>!! mb 42)
       (is (= (<!! mb) 42))))
 
   (testing "registration"
     (is (= nil (get *mailboxes* :foo)))
-    (with-open [mb (mailbox :foo)]
+    (with-open [mb (net/mailbox :foo)]
       (is (not= nil (get *mailboxes* :foo))))
     (is (= nil (get *mailboxes* :foo)))))
 
@@ -85,7 +86,7 @@
   (testing "send recv"
     (restart-selector!)
     (listen 8083)
-    (with-open [mb (mailbox :foo)]
+    (with-open [mb (net/mailbox :foo)]
       (>!! (remote-mailbox "localhost" 8083 :foo) 42)
       (is (= (<!! mb) 42))))
 
@@ -93,12 +94,12 @@
     (restart-selector!)
     (listen 8084)
 
-    (with-open [mb (mailbox :foo)]
+    (with-open [mb (net/mailbox :foo)]
       (go (let [{:keys [respond-to message]} (<! mb)]
             (>! respond-to message)))
 
       (let [remote-box (remote-mailbox "localhost" 8084 :foo)]
-        (with-open [respond-to (mailbox)]
+        (with-open [respond-to (net/mailbox)]
           (>!! remote-box
                {:respond-to respond-to
                 :message "echo this"})
