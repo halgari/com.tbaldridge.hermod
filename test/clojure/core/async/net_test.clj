@@ -1,6 +1,6 @@
 (ns clojure.core.async.net-test
   (:require [clojure.test :refer :all]
-            [clojure.core.async :refer [chan <!! >!!]]
+            [clojure.core.async :refer [chan <!! >!! go]]
             [clojure.core.async.net :refer :all])
   (:import [java.nio ByteBuffer]))
 
@@ -38,7 +38,35 @@
         (let [data (vec (range x))]
           (>!! put-chan {:data data})
           (is (= {:data data}
-                 (<!! take-chan))))))))
+                 (<!! take-chan)))))))
+  (restart-selector!))
+
+
+(deftest send-recv-loop-test
+  (restart-selector!)
+  (let [a (atom 0)
+        client-p (promise)
+        connect-p (promise)]
+    (bind "localhost" 8082 client-p)
+    (connect "localhost" 8082 connect-p)
+    (let [put-local-chan (chan 100)
+          take-local-chan (chan 100)
+          put-remote-chan (chan 100)
+          take-remote-chan (chan 100)]
+      (chan->socket put-local-chan @client-p)
+      (socket->chan @client-p take-local-chan)
+
+      (socket->chan @connect-p take-remote-chan)
+      (chan->socket put-remote-chan @connect-p)
+
+      (go (while true
+            (>! put-remote-chan (<! take-remote-chan))))
+
+      (dotimes [x 300]
+        (let [data (vec (range x))]
+          (>!! put-local-chan {:data data})
+          (is (= {:data data}
+                 (<!! take-local-chan))))))))
 
 
 (deftest local-mailbox
@@ -53,10 +81,25 @@
       (is (not= nil (get *mailboxes* :foo))))
     (is (= nil (get *mailboxes* :foo)))))
 
-#_(deftest remote-mailbox-tests
+(deftest remote-mailbox-tests
   (testing "send recv"
     (restart-selector!)
-    (listen 8080)
+    (listen 8083)
     (with-open [mb (mailbox :foo)]
-      (>!! (remote-mailbox "localhost" 8080 :foo) 42)
-      (is (= (<!! mb) 42)))))
+      (>!! (remote-mailbox "localhost" 8083 :foo) 42)
+      (is (= (<!! mb) 42))))
+
+  (testing "can send mailboxes to mailboxes"
+    (restart-selector!)
+    (listen 8084)
+
+    (with-open [mb (mailbox :foo)]
+      (go (let [{:keys [respond-to message]} (<! mb)]
+            (>! respond-to message)))
+
+      (let [remote-box (remote-mailbox "localhost" 8084 :foo)]
+        (with-open [respond-to (mailbox)]
+          (>!! remote-box
+               {:respond-to respond-to
+                :message "echo this"})
+          (is (= (<!! respond-to) "echo this")))))))

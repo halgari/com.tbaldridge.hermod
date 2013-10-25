@@ -3,13 +3,18 @@
            [java.util.concurrent Executors]
            [java.io Closeable]
            [java.nio ByteBuffer]
-           [java.nio.channels Selector SelectionKey SelectableChannel ServerSocketChannel SocketChannel])
+           [java.nio.channels Selector SelectionKey SelectableChannel ServerSocketChannel SocketChannel]
+           [org.fressian.handlers WriteHandler ReadHandler])
   (:require [clojure.core.async :refer [put! take! chan thread dropping-buffer go close! <!! >!!]]
             [clojure.core.async.impl.dispatch :as dispatch]
             [clojure.core.async.net.impl.fressian :as fressian]
             [clojure.stacktrace :as st]
             [clojure.core.async.impl.protocols :as async-impl]))
 
+(declare net-write-handlers)
+(declare net-read-handlers)
+
+(def ^:dynamic *active-addr*)
 
 #_(defn put!-or-die [c val]
     (alt!! [[c val]] ([] :ok)
@@ -30,6 +35,17 @@
    (.isReadable k) :read
    (.isWritable k) :write))
 
+(defn dispatch-ops [^SelectionKey k selector]
+  (when (.isReadable k)
+    ((get (.attachment k) SelectionKey/OP_READ) k selector))
+  (when (.isWritable k)
+    ((get (.attachment k) SelectionKey/OP_WRITE) k selector))
+  (when (.isConnectable k)
+    ((get (.attachment k) SelectionKey/OP_CONNECT) k selector)
+    (.cancel k))
+  (when (.isAcceptable k)
+    ((get (.attachment k) SelectionKey/OP_ACCEPT) k selector)))
+
 (defprotocol ISelector
   (start-control-thread [this])
   (enqueue-op [this channel flags f])
@@ -43,20 +59,19 @@
     (thread
      (try
        (loop []
-         (doseq [[^SelectableChannel c ^int flags ^SelectionKey f] (reset-old! ops [])]
-           (println "add op" flags c)
+         (doseq [[^SelectableChannel c ^int flag ^SelectionKey f] (reset-old! ops [])]
            (.configureBlocking c false)
-           (.register c selector flags f))
+           (if (.isRegistered c)
+             (let [^SelectionKey key (.keyFor c selector)]
+               (.interestOps key (bit-or (.interestOps key) flag))
+               (.attach key (assoc (.attachment key) flag f)))
+             (.register c selector flag {flag f})))
          (when-not (= 0 (.select selector))
            (let [iterator (.iterator (.selectedKeys selector))]
-             #_(println (.hasNext iterator))
              (while (.hasNext iterator)
-               #_(println "-----")
                (let [key (.next iterator)]
                  #_(println (.isConnectable key) (.isAcceptable key))
-                 ((.attachment key) key selector)
-                 (when (.isConnectable key)
-                   (.cancel key))
+                 (dispatch-ops key selector)
                  (.remove iterator)))))
          (if @kill-chan
            (do
@@ -110,6 +125,11 @@
                   (fn [_ _]
                     (handler-fn channel))))))
 
+(defn defressian [^SocketChannel channel data]
+  (binding [*active-addr* (-> channel
+                              .socket
+                              .getRemoteSocketAddress)]
+    (fressian/defressian data :handlers net-read-handlers)))
 
 (defn socket->chan [^SocketChannel channel c]
   (let [flag-chan (chan (dropping-buffer 1))
@@ -123,14 +143,17 @@
                       (put! out-chan out-buffer)))
                   out-chan)]
     (go
-     (let [tmp-c (chan 1)]
-       (loop []
-         (let [s (<! (read-fn (ByteBuffer/allocate 4) tmp-c))
-               data-size (.getInt ^ByteBuffer s)
-               data (<! (read-fn (ByteBuffer/allocate data-size) tmp-c))
-               obj (fressian/defressian data :handlers fressian/clojure-read-handlers)]
-           (>! c obj))
-         (recur))))
+     (try
+       (let [tmp-c (chan 1)]
+         (loop []
+           (let [s (<! (read-fn (ByteBuffer/allocate 4) tmp-c))
+                 data-size (.getInt ^ByteBuffer s)
+                 data (<! (read-fn (ByteBuffer/allocate data-size) tmp-c))
+                 obj (defressian channel data)]
+             (>! c obj))
+           (recur)))
+       (catch Throwable ex
+         (println ex))))
     (enqueue-op *selector* channel SelectionKey/OP_READ
                 (fn [_ _]
                   (put! flag-chan :ping)))))
@@ -149,7 +172,7 @@
                                                                (.interestOps k)))))))
     (go (try (loop []
                (when-let [v (<! c)]
-                 (let [binary (fressian/byte-buf v :handlers fressian/clojure-write-handlers)
+                 (let [binary (fressian/byte-buf v :handlers net-write-handlers)
                        out-buff (ByteBuffer/allocate (+ (.limit binary) 4))]
                    (.putInt out-buff (.limit binary))
                    (.put out-buff binary)
@@ -219,13 +242,16 @@
 
 (defn dispatcher [c]
   (go
-   (loop []
-     (println "dispatch loop")
-     (when-let [{:keys [mailbox message] :as orig} (<! c)]
-       (println "dispatch got" orig)
-       (let [mb (get *mailboxes* mailbox)]
-         (put! mb message))
-       (recur)))))
+   (try
+     (loop []
+       (println "dispatch loop")
+       (when-let [{:keys [mailbox message] :as orig} (<! c)]
+         (println "dispatch got" orig)
+         (let [mb (get *mailboxes* mailbox)]
+           (put! mb message))
+         (recur)))
+     (catch Throwable ex
+       (println ex)))))
 
 (defn connect-and-wire [^InetSocketAddress addr c]
   (println "connecting to " addr)
@@ -249,16 +275,23 @@
           (connect-and-wire addr c)
           (recur @*remote-connections*))))))
 
+(defprotocol IHost
+  (host [this]))
+
 (deftype RemoteMailbox [addr name-sym]
   INamed
   (-name [this]
     name-sym)
+  IHost
+  (host [this]
+    addr)
   async-impl/WritePort
   (put! [this val fn0-handler]
     (println "remote put")
     (let [msg {:mailbox (-name this)
                :message val}
           c (get-or-connect addr)]
+      (println "->>>> " c)
       (async-impl/put! c msg fn0-handler))))
 
 
@@ -277,3 +310,36 @@
 
 (defn remote-mailbox [host port name]
   (RemoteMailbox. (InetSocketAddress. host port) name))
+
+
+(def net-read-handlers
+  (merge fressian/clojure-read-handlers
+    {"lmb"
+     (reify ReadHandler (read [_ rdr tag _]
+                          (RemoteMailbox. *active-addr* (.readObject rdr))))}
+    {"rmb"
+     (reify ReadHandler (read [_ rdr tag _]
+                          (RemoteMailbox. (.readObject rdr) (.readObject rdr))))}
+    {"inetaddr"
+     (reify ReadHandler (read [_ rdr tag _]
+                          (InetSocketAddress. ^String (.readObject rdr) (int (.readObject rdr)))))}))
+
+(def net-write-handlers
+  (merge fressian/clojure-write-handlers
+    {InetSocketAddress
+     {"inetaddr"
+      (reify WriteHandler (write [_ w addr]
+                            (.writeTag w "inetaddr" 2)
+                            (.writeObject (.getHostString addr))
+                            (.writeObject (.getPort addr))))}}
+    {LocalMailbox
+     {"lmb"
+      (reify WriteHandler (write [_ w mb]
+                            (.writeTag w "lmb" 1)
+                            (.writeObject w (-name mb))))}}
+    {RemoteMailbox
+     {"rmb"
+      (reify WriteHandler (write [_ w rmb]
+                            (.writeTag w "rmb" 2)
+                            (.writeObject w (host rmb))
+                            (.writeObject w (-name rmb))))}}))
