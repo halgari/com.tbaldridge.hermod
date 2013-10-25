@@ -24,6 +24,7 @@
       (String. "UTF-8")))
 
 (deftest send-recv
+  (restart-selector!)
   (let [a (atom 0)
         client-p (promise)
         connect-p (promise)]
@@ -32,11 +33,30 @@
     (let [put-chan (chan 100)
           take-chan (chan 100)]
       (chan->socket put-chan @client-p)
-      (socket->chan @connect-p take-chan 1024)
-      (dotimes [x 3000]
+      (socket->chan @connect-p take-chan)
+      (dotimes [x 300]
         (let [data (vec (range x))]
-          (println "putting " x)
-          (>!! put-chan data)
-          (println x)
-          (is (= data
+          (>!! put-chan {:data data})
+          (is (= {:data data}
                  (<!! take-chan))))))))
+
+
+(deftest local-mailbox
+  (testing "send recv directly"
+    (with-open [mb (mailbox)]
+      (>!! mb 42)
+      (is (= (<!! mb) 42))))
+
+  (testing "registration"
+    (is (= nil (get *mailboxes* :foo)))
+    (with-open [mb (mailbox :foo)]
+      (is (not= nil (get *mailboxes* :foo))))
+    (is (= nil (get *mailboxes* :foo)))))
+
+#_(deftest remote-mailbox-tests
+  (testing "send recv"
+    (restart-selector!)
+    (listen 8080)
+    (with-open [mb (mailbox :foo)]
+      (>!! (remote-mailbox "localhost" 8080 :foo) 42)
+      (is (= (<!! mb) 42)))))
