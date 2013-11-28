@@ -1,5 +1,5 @@
-(ns clojure.core.async.net
-  (:require [clojure.core.async.net.impl.internals :as internals]
+(ns com.tbaldridge.hermod
+  (:require [com.tbaldridge.hermod.impl.internals :as internals]
             [clojure.core.async :refer [dropping-buffer]]))
 
 

@@ -1,4 +1,4 @@
-(ns clojure.core.async.net.impl.internals
+(ns com.tbaldridge.hermod.impl.internals
   (:import [java.net InetSocketAddress]
            [java.util.concurrent Executors]
            [java.io Closeable]
@@ -7,7 +7,7 @@
            [org.fressian.handlers WriteHandler ReadHandler])
   (:require [clojure.core.async :refer [put! take! chan thread dropping-buffer go close! <!! >!!]]
             [clojure.core.async.impl.dispatch :as dispatch]
-            [clojure.core.async.net.impl.fressian :as fressian]
+            [clojure.data.fressian :as fressian]
             [clojure.stacktrace :as st]
             [clojure.core.async.impl.protocols :as async-impl]))
 
@@ -123,7 +123,7 @@
   (binding [*active-addr* (-> channel
                               .socket
                               .getRemoteSocketAddress)]
-    (fressian/defressian data :handlers net-read-handlers)))
+    (fressian/read data :handlers net-read-handlers)))
 
 (defn socket->chan
   "Enables machinery that reads from a socket, deserializes the data,
@@ -150,7 +150,9 @@
              (>! c obj))
            (recur)))
        (catch Throwable ex
-         (println ex))))
+         (println ex)
+         (clojure.stacktrace/print-stack-trace ex)
+         (println "----"))))
     (enqueue-op *selector* channel SelectionKey/OP_READ
                 (fn [_ _]
                   (put! flag-chan :ping)))))
@@ -172,7 +174,7 @@
                                                                (.interestOps k)))))))
     (go (try (loop []
                (when-let [v (<! c)]
-                 (let [binary (fressian/byte-buf v :handlers net-write-handlers)
+                 (let [binary (fressian/write v :handlers net-write-handlers)
                        out-buff (ByteBuffer/allocate (+ (.limit binary) 4))]
                    (.putInt out-buff (.limit binary))
                    (.put out-buff binary)
@@ -183,7 +185,9 @@
                      (>! enable-chan :ping)))
                  (recur)))
              (catch Throwable ex
-               (println ex))))))
+               (println ex)
+               (clojure.stacktrace/print-stack-trace ex)
+               (println "----"))))))
 
 
 (defprotocol IMailboxRegistry
@@ -241,7 +245,9 @@
    (try
      (loop []
        (when-let [{:keys [mailbox message] :as orig} (<! c)]
-         (let [mb (get *mailboxes* mailbox)]
+         (let [mb (if (extends? async-impl/WritePort (class mailbox))
+                    mailbox
+                    (get *mailboxes* mailbox))]
            (put! mb message))
          (recur)))
      (catch Throwable ex
@@ -284,6 +290,18 @@
           c (get-or-connect addr)]
       (async-impl/put! c msg fn0-handler))))
 
+(deftype ForwadingMailbox [addr remote-box]
+  async-impl/WritePort
+  (put! [this val fn0-handler]
+    (let [msg {:mailbox remote-box
+               :message val}
+          c (get-or-connect addr)]
+      (assert c)
+      (async-impl/put! c msg fn0-handler))))
+
+(defn forwarding-mailbox [host port remote-box]
+  (ForwadingMailbox. (InetSocketAddress. host port) remote-box))
+
 
 (defn listen
   "Opens a local TCP port and listens to incoming message deliveries."
@@ -316,33 +334,35 @@
 
 
 (def net-read-handlers
-  (merge fressian/clojure-read-handlers
-    {"lmb"
-     (reify ReadHandler (read [_ rdr tag _]
-                          (RemoteMailbox. *active-addr* (.readObject rdr))))}
-    {"rmb"
-     (reify ReadHandler (read [_ rdr tag _]
-                          (RemoteMailbox. (.readObject rdr) (.readObject rdr))))}
-    {"inetaddr"
-     (reify ReadHandler (read [_ rdr tag _]
-                          (InetSocketAddress. ^String (.readObject rdr) (int (.readObject rdr)))))}))
+  (-> (merge fressian/clojure-read-handlers
+             {"lmb"
+              (reify ReadHandler (read [_ rdr tag _]
+                                   (RemoteMailbox. *active-addr* (.readObject rdr))))}
+             {"rmb"
+              (reify ReadHandler (read [_ rdr tag _]
+                                   (RemoteMailbox. (.readObject rdr) (.readObject rdr))))}
+             {"inetaddr"
+              (reify ReadHandler (read [_ rdr tag _]
+                                   (InetSocketAddress. ^String (.readObject rdr) (int (.readObject rdr)))))})
+      fressian/associative-lookup))
 
 (def net-write-handlers
-  (merge fressian/clojure-write-handlers
-    {InetSocketAddress
-     {"inetaddr"
-      (reify WriteHandler (write [_ w addr]
-                            (.writeTag w "inetaddr" 2)
-                            (.writeObject (.getHostString addr))
-                            (.writeObject (.getPort addr))))}}
-    {LocalMailbox
-     {"lmb"
-      (reify WriteHandler (write [_ w mb]
-                            (.writeTag w "lmb" 1)
-                            (.writeObject w (-name mb))))}}
-    {RemoteMailbox
-     {"rmb"
-      (reify WriteHandler (write [_ w rmb]
-                            (.writeTag w "rmb" 2)
-                            (.writeObject w (host rmb))
-                            (.writeObject w (-name rmb))))}}))
+  (-> (merge fressian/clojure-write-handlers
+             {InetSocketAddress
+              {"inetaddr"
+               (reify WriteHandler (write [_ w addr]
+                                     (.writeTag w "inetaddr" 2)
+                                     (.writeObject w (.getHostString addr))
+                                     (.writeObject w (.getPort addr))))}}
+             {LocalMailbox
+              {"lmb"
+               (reify WriteHandler (write [_ w mb]
+                                     (.writeTag w "lmb" 1)
+                                     (.writeObject w (-name mb))))}}
+             {RemoteMailbox
+              {"rmb"
+               (reify WriteHandler (write [_ w rmb]
+                                     (.writeTag w "rmb" 2)
+                                     (.writeObject w (host rmb))
+                                     (.writeObject w (-name rmb))))}})
+      fressian/associative-lookup))

@@ -1,8 +1,8 @@
-(ns clojure.core.async.net-test
+(ns com.tbaldridge.hermod.net-test
   (:require [clojure.test :refer :all]
             [clojure.core.async :refer [chan <!! >!! go]]
-            [clojure.core.async.net.impl.internals :refer :all]
-            [clojure.core.async.net :as net])
+            [com.tbaldridge.hermod.impl.internals :refer :all]
+            [com.tbaldridge.hermod :as net])
   (:import [java.nio ByteBuffer]))
 
 (deftest bind-connect
@@ -104,3 +104,12 @@
                {:respond-to respond-to
                 :message "echo this"})
           (is (= (<!! respond-to) "echo this")))))))
+
+(deftest forwarded-mailboxes
+  (restart-selector!)
+  (listen 8085)
+
+  (with-open [mb (net/mailbox :foo)]
+    (let [fb (forwarding-mailbox "localhost" 8085 (remote-mailbox "localhost" 8085 :foo))]
+      (>!! fb 42)
+      (is (= 42 (<!! mb))))))

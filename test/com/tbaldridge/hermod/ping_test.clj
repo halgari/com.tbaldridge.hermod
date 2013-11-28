@@ -1,7 +1,7 @@
-(ns clojure.core.async.ping-test
+(ns com.tbaldridge.hermod
   (:require [clojure.test :refer :all]
             [clojure.core.async :refer [chan <!! >!! go alt!! timeout]]
-            [clojure.core.async.net :refer :all]))
+            [com.tbaldridge.hermod :refer :all]))
 
 (defn ping-mailbox [name]
   (go
@@ -10,7 +10,7 @@
        (when-let [{:keys [return-to msg]} (<! m)]
          (>! return-to msg)
          (recur))))))
-
+kjghl
 (deftest ping-test
   ;; Only used during testing to make sure we have a clean state
   (restart-selector!)

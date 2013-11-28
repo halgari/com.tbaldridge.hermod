@@ -1,4 +1,4 @@
-# clojure.core.async.net (name TBD)
+# Hermod
 
 This is a library designed to answer the question "how do I easily send data from a go on one JVM to a go on another"
 
@@ -46,7 +46,7 @@ sockets used by clients to contact the server will then be used for responses to
     (ns clojure.core.async.ping-test
       (:require [clojure.test :refer :all]
                 [clojure.core.async :refer [chan <!! >!! go alt!! timeout]]
-                [clojure.core.async.net :refer :all]))
+                [com.tbaldridge.hermod :refer :all]))
 
     (defn ping-mailbox [name]
       (go
