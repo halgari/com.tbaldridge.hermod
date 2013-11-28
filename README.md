@@ -12,12 +12,12 @@ read by the addressee is to receive a response from the reader.
 
 This library's semantics can thus be defined quite simply:
 
-1) Mailboxes can be created
-2) Mailboxes that exist on the local VM can be written to and read from
-3) Mailbox pointers (aka, remote mailboxes) can only be sent to
-4) Sending messages to mailboxes is unreliable. Messages will be delivered complete, without data corruption,
+1. Mailboxes can be created
+2. Mailboxes that exist on the local VM can be written to and read from
+3. Mailbox pointers (aka, remote mailboxes) can only be sent to
+4. Sending messages to mailboxes is unreliable. Messages will be delivered complete, without data corruption,
    only best-effort semantics are guaranteed
-5) Sending a message to a mailbox is always non-blocking. If network buffers are too full, the message may be dropped.
+5. Sending a message to a mailbox is always non-blocking. If network buffers are too full, the message may be dropped.
 
 ## Technology
 
