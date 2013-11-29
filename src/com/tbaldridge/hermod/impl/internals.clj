@@ -4,17 +4,22 @@
            [java.io Closeable]
            [java.nio ByteBuffer]
            [java.nio.channels Selector SelectionKey SelectableChannel ServerSocketChannel SocketChannel]
-           [org.fressian.handlers WriteHandler ReadHandler])
+           [org.fressian.handlers WriteHandler ReadHandler]
+           [org.fressian Writer Reader])
   (:require [clojure.core.async :refer [put! take! chan thread dropping-buffer go close! <!! >!!]]
             [clojure.core.async.impl.dispatch :as dispatch]
             [clojure.data.fressian :as fressian]
             [clojure.stacktrace :as st]
             [clojure.core.async.impl.protocols :as async-impl]))
 
+(set! *warn-on-reflection* true)
+
 (declare net-write-handlers)
 (declare net-read-handlers)
 
 (def ^:dynamic *active-addr*)
+(def ^:dynamic *remote-connections* (atom {}))
+
 
 
 (defn reset-old!
@@ -72,12 +77,12 @@
          (if @kill-chan
            (do
              (doseq [k (-> selector
-                             .selectedKeys
-                             .iterator
-                             iterator-seq)]
-                 (-> (.channel k)
-                     .close))
-               (close! @kill-chan))
+                           .keys
+                           .iterator
+                           iterator-seq)]
+               (.close (.channel ^SocketChannel k)))
+             (.close selector)
+             (close! @kill-chan))
            (recur)))
        (catch Throwable ex
          (println ex)
@@ -89,16 +94,25 @@
     (.wakeup selector))
   (shutdown [this c]
     (if @kill-chan
-      (close! @kill-chan)
+      (assert false "already shutting down")
       (do (reset! kill-chan c)
+
           (.wakeup selector)))
     c))
 
-(def ^:dynamic *selector* (start-control-thread (SelectorControl. (Selector/open) (atom []) (atom nil))))
+(def ^:dynamic *selector* (start-control-thread (SelectorControl. (Selector/open)
+                                                                  (atom [])
+                                                                  (atom nil))))
 
 (defn restart-selector! []
-  (<!! (shutdown *selector* (chan 1)))
-  (alter-var-root #'*selector* (fn [x] (start-control-thread (SelectorControl. (Selector/open) (atom []) (atom nil))))))
+  (reset! *remote-connections* {})
+  (alter-var-root #'*selector*
+                  (fn [x]
+                    (<!! (shutdown x (chan 1)))
+                    (start-control-thread
+                          (SelectorControl. (Selector/open)
+                                            (atom [])
+                                            (atom nil))))))
 
 (defn bind [^String addr port handler-fn]
   (let [server (ServerSocketChannel/open)]
@@ -150,6 +164,7 @@
              (>! c obj))
            (recur)))
        (catch Throwable ex
+         (close! c)
          (println ex)
          (clojure.stacktrace/print-stack-trace ex)
          (println "----"))))
@@ -181,7 +196,7 @@
                    (.flip out-buff)
                    (while (.hasRemaining ^ByteBuffer out-buff)
                      (<! flag-chan)
-                     (.write ^SocketChannel channel out-buff)
+                     (.write ^SocketChannel channel ^ByteBuffer out-buff)
                      (>! enable-chan :ping)))
                  (recur)))
              (catch Throwable ex
@@ -237,8 +252,6 @@
      (let [mb (LocalMailbox. (chan buffer) name)]
        (register! *mailboxes* mb)
        mb)))
-
-(def ^:dynamic *remote-connections* (atom {}))
 
 (defn dispatcher [c]
   (go
@@ -299,7 +312,7 @@
       (assert c)
       (async-impl/put! c msg fn0-handler))))
 
-(defn forwarding-mailbox [host port remote-box]
+(defn forwarding-mailbox [^String host ^Long port remote-box]
   (ForwadingMailbox. (InetSocketAddress. host port) remote-box))
 
 
@@ -329,7 +342,7 @@
   name - the name of the remote mailbox
 
   Remote mailboxes may be sent messages via core.async put methods"
-  [host port name]
+  [^String host ^Long port name]
   (RemoteMailbox. (InetSocketAddress. host port) name))
 
 
@@ -350,13 +363,13 @@
   (-> (merge fressian/clojure-write-handlers
              {InetSocketAddress
               {"inetaddr"
-               (reify WriteHandler (write [_ w addr]
+               (reify WriteHandler (write [_  w addr]
                                      (.writeTag w "inetaddr" 2)
-                                     (.writeObject w (.getHostString addr))
-                                     (.writeObject w (.getPort addr))))}}
+                                     (.writeObject w (.getHostString ^InetSocketAddress addr))
+                                     (.writeObject w (.getPort ^InetSocketAddress addr))))}}
              {LocalMailbox
               {"lmb"
-               (reify WriteHandler (write [_ w mb]
+               (reify WriteHandler (write [_  w mb]
                                      (.writeTag w "lmb" 1)
                                      (.writeObject w (-name mb))))}}
              {RemoteMailbox

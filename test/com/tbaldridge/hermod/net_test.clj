@@ -6,11 +6,13 @@
   (:import [java.nio ByteBuffer]))
 
 (deftest bind-connect
+  (restart-selector!)
   (let [a (atom 0)]
     (bind "localhost" 8080 (fn [x] (swap! a inc)))
     (connect "localhost" 8080 (fn [x] (swap! a inc)))
     (Thread/sleep 100)
-    (is (= @a 2))))
+    (is (= @a 2)))
+  (restart-selector!))
 
 (defn string->byte-buffer ^ByteBuffer [^String s]
   (let [bb (-> s
@@ -29,8 +31,8 @@
   (let [a (atom 0)
         client-p (promise)
         connect-p (promise)]
-    (bind "localhost" 8081 client-p)
-    (connect "localhost" 8081 connect-p)
+    (bind "localhost" 8080 client-p)
+    (connect "localhost" 8080 connect-p)
     (let [put-chan (chan 100)
           take-chan (chan 100)]
       (chan->socket put-chan @client-p)
@@ -48,8 +50,8 @@
   (let [a (atom 0)
         client-p (promise)
         connect-p (promise)]
-    (bind "localhost" 8082 client-p)
-    (connect "localhost" 8082 connect-p)
+    (bind "localhost" 8080 client-p)
+    (connect "localhost" 8080 connect-p)
     (let [put-local-chan (chan 100)
           take-local-chan (chan 100)
           put-remote-chan (chan 100)
@@ -70,7 +72,8 @@
                  (<!! take-local-chan))))))))
 
 
-(deftest local-mailbox
+(deftest local-mailbox-tests
+  (restart-selector!)
   (testing "send recv directly"
     (with-open [mb (net/mailbox)]
       (>!! mb 42)
@@ -80,36 +83,33 @@
     (is (= nil (get *mailboxes* :foo)))
     (with-open [mb (net/mailbox :foo)]
       (is (not= nil (get *mailboxes* :foo))))
-    (is (= nil (get *mailboxes* :foo)))))
+    (is (= nil (get *mailboxes* :foo))))
+
+    (restart-selector!))
 
 (deftest remote-mailbox-tests
+  (restart-selector!)
+
   (testing "send recv"
     (restart-selector!)
-    (listen 8083)
+    (listen 8080)
     (with-open [mb (net/mailbox :foo)]
-      (>!! (remote-mailbox "localhost" 8083 :foo) 42)
+      (>!! (remote-mailbox "localhost" 8080 :foo) 42)
       (is (= (<!! mb) 42))))
+
 
   (testing "can send mailboxes to mailboxes"
     (restart-selector!)
-    (listen 8084)
+    (listen 8080)
 
     (with-open [mb (net/mailbox :foo)]
       (go (let [{:keys [respond-to message]} (<! mb)]
             (>! respond-to message)))
 
-      (let [remote-box (remote-mailbox "localhost" 8084 :foo)]
+      (let [remote-box (remote-mailbox "localhost" 8080 :foo)]
         (with-open [respond-to (net/mailbox)]
           (>!! remote-box
                {:respond-to respond-to
                 :message "echo this"})
-          (is (= (<!! respond-to) "echo this")))))))
-
-(deftest forwarded-mailboxes
-  (restart-selector!)
-  (listen 8085)
-
-  (with-open [mb (net/mailbox :foo)]
-    (let [fb (forwarding-mailbox "localhost" 8085 (remote-mailbox "localhost" 8085 :foo))]
-      (>!! fb 42)
-      (is (= 42 (<!! mb))))))
+          (is (= (<!! respond-to) "echo this"))))))
+  (restart-selector!))
