@@ -145,21 +145,27 @@
   [^SocketChannel channel c]
   (let [flag-chan (chan (dropping-buffer 1))
         read-fn (fn read-fn [^ByteBuffer out-buffer out-chan]
-                  (.read channel out-buffer)
-                  (if (.hasRemaining out-buffer)
-                    (take! flag-chan (fn [_]
-                                       (read-fn out-buffer out-chan)))
-                    (do
-                      (.flip out-buffer)
-                      (put! out-chan out-buffer)))
+                  (take! flag-chan
+                         (fn [[^SelectionKey k ^Selector selector]]
+                           (if (= -1 (.read channel out-buffer))
+                             (do (put! out-chan ::error)
+                                 (.cancel k)
+                                 (.close channel))
+                             (if (.hasRemaining out-buffer)
+                               (read-fn out-buffer out-chan)
+                               (do
+                                 (.flip out-buffer)
+                                 (put! out-chan out-buffer))))))
                   out-chan)]
     (go
      (try
        (let [tmp-c (chan 1)]
          (loop []
            (let [s (<! (read-fn (ByteBuffer/allocate 4) tmp-c))
+                 _ (assert (not (identical? s ::error)) "Connection Reset")
                  data-size (.getInt ^ByteBuffer s)
                  data (<! (read-fn (ByteBuffer/allocate data-size) tmp-c))
+                 _ (assert (not (identical? data ::error)) "Connection Reset")
                  obj (defressian channel data)]
              (>! c obj))
            (recur)))
@@ -169,8 +175,8 @@
          (clojure.stacktrace/print-stack-trace ex)
          (println "----"))))
     (enqueue-op *selector* channel SelectionKey/OP_READ
-                (fn [_ _]
-                  (put! flag-chan :ping)))))
+                (fn [k selector]
+                  (put! flag-chan [k selector])))))
 
 
 (defn chan->socket

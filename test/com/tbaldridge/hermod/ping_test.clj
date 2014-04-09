@@ -10,7 +10,7 @@
        (when-let [{:keys [return-to msg]} (<! m)]
          (>! return-to msg)
          (recur))))))
-kjghl
+
 (deftest ping-test
   ;; Only used during testing to make sure we have a clean state
   (restart-selector!)
