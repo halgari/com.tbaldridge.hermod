@@ -6,7 +6,7 @@
            [java.nio.channels Selector SelectionKey SelectableChannel ServerSocketChannel SocketChannel]
            [org.fressian.handlers WriteHandler ReadHandler]
            [org.fressian Writer Reader])
-  (:require [clojure.core.async :refer [put! take! chan thread dropping-buffer go close! <!! >!!]]
+  (:require [clojure.core.async :refer [put! take! chan thread dropping-buffer go close! <!! >!! <! >!]]
             [clojure.core.async.impl.dispatch :as dispatch]
             [clojure.data.fressian :as fressian]
             [clojure.stacktrace :as st]
@@ -195,15 +195,18 @@
                                                                (.interestOps k)))))))
     (go (try (loop []
                (when-let [v (<! c)]
-                 (let [binary (fressian/write v :handlers net-write-handlers)
-                       out-buff (ByteBuffer/allocate (+ (.limit binary) 4))]
-                   (.putInt out-buff (.limit binary))
-                   (.put out-buff binary)
-                   (.flip out-buff)
-                   (while (.hasRemaining ^ByteBuffer out-buff)
-                     (<! flag-chan)
-                     (.write ^SocketChannel channel ^ByteBuffer out-buff)
-                     (>! enable-chan :ping)))
+                 (let [binary (try (fressian/write v :handlers net-write-handlers)
+                                   (catch Throwable ex
+                                     nil))]
+                   (when binary
+                     (let [out-buff (ByteBuffer/allocate (+ (.limit ^ByteBuffer binary) 4))]
+                       (.putInt out-buff (.limit ^ByteBuffer binary))
+                       (.put out-buff binary)
+                       (.flip out-buff)
+                       (while (.hasRemaining ^ByteBuffer out-buff)
+                         (<! flag-chan)
+                         (.write ^SocketChannel channel ^ByteBuffer out-buff)
+                         (>! enable-chan :ping)))))
                  (recur)))
              (catch Throwable ex
                (println ex)
