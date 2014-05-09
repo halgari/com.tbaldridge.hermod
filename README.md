@@ -19,6 +19,10 @@ This library's semantics can thus be defined quite simply:
    only best-effort semantics are guaranteed
 5. Sending a message to a mailbox is always non-blocking. If network buffers are too full, the message may be dropped.
 
+## Current Version
+
+   [com.tbaldridge.hermod "0.1.3"]
+
 ## Technology
 
 This library is built on top of Fressian and Java NIO.
