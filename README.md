@@ -21,7 +21,7 @@ This library's semantics can thus be defined quite simply:
 
 ## Current Version
 
-   [com.tbaldridge.hermod "0.1.3"]
+    [com.tbaldridge.hermod "0.1.3"]
 
 ## Technology
 
