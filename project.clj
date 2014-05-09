@@ -1,4 +1,4 @@
-(defproject com.tbaldridge.hermod "0.1.2"
+(defproject com.tbaldridge.hermod "0.1.3"
   :description "A Mailbox based distributed computing library"
   :url "http://github.com/halgari/com.tbaldridge.hermod"
   :license {:name "Eclipse Public License"
