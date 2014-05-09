@@ -82,6 +82,12 @@ sockets used by clients to contact the server will then be used for responses to
             (alt!! [lbx] ([v] (is (= x v)))
                    [(timeout 1000)] (assert false "Timeout after 1000 ms"))))))
 
+## Contributing
+
+If you have improvements to the library feel would be beneficial to the community at large, please submit them via a pull
+request. One of the project maintainers will take a look at the patch and comment/merge as soon as possible.
+
+
 ## Meaning of "Hermod"
 
 In Norse mythology Hermod is the son of Odin and Frigg and the messenger of the gods
